@@ -178,6 +178,7 @@ function TeachersPanel() {
   const [formError,  setFormError]  = useState('')
   const [saving,     setSaving]     = useState(false)
   const [editingTeacher, setEditingTeacher] = useState(null)
+  const [showInactive,   setShowInactive]   = useState(false)
 
   useEffect(() => { loadTeachers() }, [])
 
@@ -328,9 +329,21 @@ function TeachersPanel() {
         />
       )}
       <div className="flex flex-col gap-2">
-        {teachers.map(t => (
-          <TeacherRow key={t.id} teacher={t} onToggle={toggleActive} onResetPassword={resetPassword} onDelete={deleteTeacher} onEdit={setEditingTeacher} />
-        ))}
+        {teachers
+          .filter(t => showInactive ? true : t.active)
+          .map(t => (
+            <TeacherRow key={t.id} teacher={t} onToggle={toggleActive} onResetPassword={resetPassword} onEdit={setEditingTeacher} />
+          ))}
+        {teachers.some(t => !t.active) && (
+          <button
+            onClick={() => setShowInactive(v => !v)}
+            className="text-xs text-slate-400 hover:text-slate-600 text-center py-2 transition-colors"
+          >
+            {showInactive
+              ? '— Ocultar desactivados —'
+              : `— Mostrar desactivados (${teachers.filter(t => !t.active).length}) —`}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -402,9 +415,9 @@ function EditTeacherModal({ teacher, onSave, onClose }) {
   )
 }
 
-function TeacherRow({ teacher, onToggle, onResetPassword, onDelete, onEdit }) {
+function TeacherRow({ teacher, onToggle, onResetPassword, onEdit }) {
   return (
-    <div className={`card flex items-center gap-3 ${!teacher.active ? 'opacity-50' : ''}`}>
+    <div className={`card flex items-center gap-3 ${!teacher.active ? 'opacity-40' : ''}`}>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="font-medium text-slate-800 text-sm truncate">{teacher.name}</p>
@@ -412,7 +425,12 @@ function TeacherRow({ teacher, onToggle, onResetPassword, onDelete, onEdit }) {
             ${teacher.role === 'preceptor' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
             {teacher.role}
           </span>
-          {teacher.must_change_password && (
+          {!teacher.active && (
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 shrink-0">
+              desactivado
+            </span>
+          )}
+          {teacher.must_change_password && teacher.active && (
             <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">
               contraseña temporal
             </span>
@@ -420,22 +438,24 @@ function TeacherRow({ teacher, onToggle, onResetPassword, onDelete, onEdit }) {
         </div>
         <div className="flex items-center gap-3 mt-0.5 flex-wrap">
           <p className="text-xs text-slate-400">@{teacher.username}</p>
-          <button onClick={() => onEdit(teacher)}
-            className="text-xs text-slate-400 hover:text-primary-500 transition-colors">
-            editar
-          </button>
-          <button onClick={() => onResetPassword(teacher)}
-            className="text-xs text-slate-400 hover:text-blue-600 transition-colors">
-            resetear contraseña
-          </button>
-          <button onClick={() => onDelete(teacher)}
-            className="text-xs text-slate-400 hover:text-red-500 transition-colors">
-            eliminar
-          </button>
+          {teacher.active && (
+            <>
+              <button onClick={() => onEdit(teacher)}
+                className="text-xs text-slate-400 hover:text-primary-500 transition-colors">
+                editar
+              </button>
+              <button onClick={() => onResetPassword(teacher)}
+                className="text-xs text-slate-400 hover:text-blue-600 transition-colors">
+                resetear contraseña
+              </button>
+            </>
+          )}
         </div>
       </div>
       <button onClick={() => onToggle(teacher)}
-        className={`shrink-0 ${teacher.active ? 'text-emerald-500 hover:text-red-400' : 'text-slate-300 hover:text-emerald-500'}`}
+        className={`shrink-0 transition-colors ${teacher.active
+          ? 'text-emerald-500 hover:text-slate-400'
+          : 'text-slate-300 hover:text-emerald-500'}`}
         title={teacher.active ? 'Desactivar' : 'Reactivar'}>
         {teacher.active ? <CheckCircle size={22} /> : <XCircle size={22} />}
       </button>
@@ -444,8 +464,19 @@ function TeacherRow({ teacher, onToggle, onResetPassword, onDelete, onEdit }) {
 }
 
 // ── Panel de estadísticas + informes ─────────────────────────────────────────
+const MONTH_NAMES_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+  'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+
 function StatsPanel({ courseStats, ranking, alerts, evaluations }) {
   const [exporting, setExporting] = useState('')
+  const now = new Date()
+  const [selMonth, setSelMonth] = useState(now.getMonth())
+  const [selYear,  setSelYear]  = useState(now.getFullYear())
+
+  // Build year options from evaluations history
+  const years = [...new Set(evaluations.map(e => new Date(e.timestamp).getFullYear()))]
+    .sort((a, b) => b - a)
+  if (!years.includes(now.getFullYear())) years.unshift(now.getFullYear())
 
   const top3    = ranking.slice(0, 3)
   const bottom3 = [...ranking].reverse().slice(0, 3)
@@ -462,9 +493,9 @@ function StatsPanel({ courseStats, ranking, alerts, evaluations }) {
     setExporting(type)
     try {
       if (type === 'pdf') {
-        await exportPDF({ ranking, courseStats, evaluations })
+        await exportPDF({ ranking, courseStats, evaluations, selectedMonth: selMonth, selectedYear: selYear })
       } else {
-        exportExcel({ ranking, evaluations, courseStats })
+        exportExcel({ ranking, evaluations, courseStats, selectedMonth: selMonth, selectedYear: selYear })
       }
     } finally {
       setTimeout(() => setExporting(''), 1000)
@@ -473,6 +504,23 @@ function StatsPanel({ courseStats, ranking, alerts, evaluations }) {
 
   return (
     <div className="flex flex-col gap-6">
+
+      {/* Selector de período */}
+      <div className="card flex items-center gap-3 flex-wrap">
+        <span className="text-sm font-medium text-slate-600 shrink-0">Período del informe:</span>
+        <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}
+          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 flex-1">
+          {MONTH_NAMES_ES.map((m, i) => (
+            <option key={i} value={i}>{m}</option>
+          ))}
+        </select>
+        <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}
+          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
+          {years.map(y => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
+      </div>
 
       {/* Botones de exportar */}
       <div className="flex gap-3">

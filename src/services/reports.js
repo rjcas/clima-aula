@@ -25,9 +25,10 @@ function formatDate(iso) {
 
 // ── PDF ────────────────────────────────────────────────────────────────────────
 
-export async function exportPDF({ ranking, courseStats, evaluations, period = 'month' }) {
+export async function exportPDF({ ranking, courseStats, evaluations, selectedMonth, selectedYear }) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-  const monthLabel = currentMonthLabel()
+  const now2ref = new Date(selectedYear, selectedMonth, 1)
+  const monthLabel = `${MONTH_NAMES[selectedMonth]} ${selectedYear}`
   const now = new Date().toLocaleDateString('es-AR')
 
   // ── Encabezado con logo ──────────────────────────────────────────────────────
@@ -98,10 +99,9 @@ export async function exportPDF({ ranking, courseStats, evaluations, period = 'm
   doc.text('Detalle de evaluaciones del mes', 14, y)
   y += 6
 
-  const now2 = new Date()
   const monthEvals = evaluations.filter(e => {
     const d = new Date(e.timestamp)
-    return d.getMonth() === now2.getMonth() && d.getFullYear() === now2.getFullYear()
+    return d.getMonth() === selectedMonth && d.getFullYear() === selectedYear
   }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
   const courses = courseStats.reduce((acc, c) => { acc[c.id] = c.label; return acc }, {})
@@ -137,9 +137,10 @@ export async function exportPDF({ ranking, courseStats, evaluations, period = 'm
 
 // ── Excel ──────────────────────────────────────────────────────────────────────
 
-export function exportExcel({ ranking, evaluations, courseStats }) {
+export function exportExcel({ ranking, evaluations, courseStats, selectedMonth, selectedYear }) {
   const wb = XLSX.utils.book_new()
-  const monthLabel = currentMonthLabel()
+  const now2ref = new Date(selectedYear, selectedMonth, 1)
+  const monthLabel = `${MONTH_NAMES[selectedMonth]} ${selectedYear}`
   const now2 = new Date()
   const courses = courseStats.reduce((acc, c) => { acc[c.id] = c.label; return acc }, {})
 
@@ -167,7 +168,7 @@ export function exportExcel({ ranking, evaluations, courseStats }) {
   // ── Hoja 2: Evaluaciones del mes ────────────────────────────────────────────
   const monthEvals = evaluations.filter(e => {
     const d = new Date(e.timestamp)
-    return d.getMonth() === now2.getMonth() && d.getFullYear() === now2.getFullYear()
+    return d.getMonth() === selectedMonth && d.getFullYear() === selectedYear
   }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
   const evalsData = [
