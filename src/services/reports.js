@@ -11,11 +11,6 @@ const MONTH_NAMES = [
   'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'
 ]
 
-function currentMonthLabel() {
-  const d = new Date()
-  return `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`
-}
-
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('es-AR', {
     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -23,20 +18,67 @@ function formatDate(iso) {
   })
 }
 
+function avg(numbers) {
+  if (!numbers.length) return 0
+  return +(numbers.reduce((a, b) => a + b, 0) / numbers.length).toFixed(2)
+}
+
+function evalAvg(e) {
+  const vals = Object.values(e.dimensions).filter(v => v !== null && v !== undefined && v > 0)
+  return vals.length ? avg(vals) : 0
+}
+
+function dimAvg(evals, dimId) {
+  const vals = evals.map(e => e.dimensions[dimId]).filter(v => v !== null && v !== undefined && v > 0)
+  return avg(vals)
+}
+
+// Calcula el ranking para el mes/año seleccionado desde las evaluaciones crudas
+function buildPeriodRanking(evaluations, courseStats, selectedMonth, selectedYear) {
+  const filtered = evaluations.filter(e => {
+    const d = new Date(e.timestamp)
+    return d.getMonth() === selectedMonth && d.getFullYear() === selectedYear
+  })
+
+  return courseStats
+    .map(course => {
+      const courseEvals = filtered.filter(e => e.courseId === course.id)
+      if (!courseEvals.length) return null
+
+      const avgs = courseEvals.map(evalAvg).filter(v => v > 0)
+      const avgMonth = avg(avgs)
+
+      return {
+        ...course,
+        avgMonth,
+        totalEvals: courseEvals.length,
+        dimensions: {
+          clima:         dimAvg(courseEvals, 'clima'),
+          espacio:       dimAvg(courseEvals, 'espacio'),
+          participacion: dimAvg(courseEvals, 'participacion'),
+          convivencia:   dimAvg(courseEvals, 'convivencia'),
+        },
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.avgMonth - a.avgMonth)
+    .map((c, i) => ({ ...c, rank: i + 1 }))
+}
+
 // ── PDF ────────────────────────────────────────────────────────────────────────
 
-export async function exportPDF({ ranking, courseStats, evaluations, selectedMonth, selectedYear }) {
+export async function exportPDF({ courseStats, evaluations, selectedMonth, selectedYear }) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-  const now2ref = new Date(selectedYear, selectedMonth, 1)
   const monthLabel = `${MONTH_NAMES[selectedMonth]} ${selectedYear}`
   const now = new Date().toLocaleDateString('es-AR')
 
+  // Recalcular ranking para el período seleccionado
+  const periodRanking = buildPeriodRanking(evaluations, courseStats, selectedMonth, selectedYear)
+
   // ── Encabezado con logo ──────────────────────────────────────────────────────
-  // Fondo degradado oscuro
   doc.setFillColor(28, 35, 51)
   doc.rect(0, 0, 210, 36, 'F')
 
-  // Logo
   try {
     const logoUrl = window.location.origin + '/logo.png'
     const resp = await fetch(logoUrl)
@@ -46,7 +88,6 @@ export async function exportPDF({ ranking, courseStats, evaluations, selectedMon
     doc.addImage(reader.result, 'PNG', 8, 4, 28, 28)
   } catch(e) { /* logo opcional */ }
 
-  // Textos del encabezado
   doc.setTextColor(255, 255, 255)
   doc.setFontSize(14)
   doc.setFont('helvetica', 'bold')
@@ -61,7 +102,7 @@ export async function exportPDF({ ranking, courseStats, evaluations, selectedMon
 
   let y = 46
 
-  // ── Ranking del mes ─────────────────────────────────────────────────────────
+  // ── Ranking del período ─────────────────────────────────────────────────────
   doc.setTextColor(30, 41, 59)
   doc.setFontSize(13)
   doc.setFont('helvetica', 'bold')
@@ -71,7 +112,7 @@ export async function exportPDF({ ranking, courseStats, evaluations, selectedMon
   autoTable(doc, {
     startY: y,
     head: [['#', 'Curso', 'Promedio mes', 'Clima', 'Espacio', 'Participación', 'Convivencia', 'Evaluaciones']],
-    body: ranking.map(c => [
+    body: periodRanking.map(c => [
       c.rank,
       c.label,
       c.avgMonth > 0 ? c.avgMonth.toFixed(2) : '—',
@@ -90,7 +131,7 @@ export async function exportPDF({ ranking, courseStats, evaluations, selectedMon
 
   y = doc.lastAutoTable.finalY + 12
 
-  // ── Detalle de evaluaciones ─────────────────────────────────────────────────
+  // ── Detalle de evaluaciones del período ─────────────────────────────────────
   if (y > 240) { doc.addPage(); y = 20 }
 
   doc.setFontSize(13)
@@ -99,12 +140,12 @@ export async function exportPDF({ ranking, courseStats, evaluations, selectedMon
   doc.text('Detalle de evaluaciones del mes', 14, y)
   y += 6
 
+  const courses = courseStats.reduce((acc, c) => { acc[c.id] = c.label; return acc }, {})
+
   const monthEvals = evaluations.filter(e => {
     const d = new Date(e.timestamp)
     return d.getMonth() === selectedMonth && d.getFullYear() === selectedYear
   }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-
-  const courses = courseStats.reduce((acc, c) => { acc[c.id] = c.label; return acc }, {})
 
   autoTable(doc, {
     startY: y,
@@ -115,7 +156,7 @@ export async function exportPDF({ ranking, courseStats, evaluations, selectedMon
       e.teacherName,
       e.subject,
       e.role,
-      e.average.toFixed(2),
+      evalAvg(e).toFixed(2),
     ]),
     headStyles:    { fillColor: [71, 85, 105], textColor: 255, fontStyle: 'bold', fontSize: 8 },
     bodyStyles:    { fontSize: 7, textColor: [30, 41, 59] },
@@ -132,24 +173,25 @@ export async function exportPDF({ ranking, courseStats, evaluations, selectedMon
     doc.text(`Página ${i} de ${pageCount} — Clima del Aula`, 105, 290, { align: 'center' })
   }
 
-  doc.save(`informe-clima-aula-${monthLabel.replace(' ','-').toLowerCase()}.pdf`)
+  doc.save(`informe-clima-aula-${monthLabel.replace(' ', '-').toLowerCase()}.pdf`)
 }
 
 // ── Excel ──────────────────────────────────────────────────────────────────────
 
-export function exportExcel({ ranking, evaluations, courseStats, selectedMonth, selectedYear }) {
+export function exportExcel({ courseStats, evaluations, selectedMonth, selectedYear }) {
   const wb = XLSX.utils.book_new()
-  const now2ref = new Date(selectedYear, selectedMonth, 1)
   const monthLabel = `${MONTH_NAMES[selectedMonth]} ${selectedYear}`
-  const now2 = new Date()
   const courses = courseStats.reduce((acc, c) => { acc[c.id] = c.label; return acc }, {})
+
+  // Recalcular ranking para el período seleccionado
+  const periodRanking = buildPeriodRanking(evaluations, courseStats, selectedMonth, selectedYear)
 
   // ── Hoja 1: Ranking ─────────────────────────────────────────────────────────
   const rankingData = [
-    ['Ranking Institucional — ' + monthLabel],
+    [`Ranking Institucional — ${monthLabel}`],
     [],
-    ['Posición', 'Curso', 'Promedio Mes', 'Clima', 'Espacio', 'Participación', 'Convivencia', 'Variación vs mes anterior', 'Total evaluaciones'],
-    ...ranking.map(c => [
+    ['Posición', 'Curso', 'Promedio Mes', 'Clima', 'Espacio', 'Participación', 'Convivencia', 'Total evaluaciones'],
+    ...periodRanking.map(c => [
       c.rank,
       c.label,
       c.avgMonth > 0 ? c.avgMonth : null,
@@ -157,22 +199,21 @@ export function exportExcel({ ranking, evaluations, courseStats, selectedMonth, 
       c.dimensions.espacio       > 0 ? c.dimensions.espacio       : null,
       c.dimensions.participacion > 0 ? c.dimensions.participacion : null,
       c.dimensions.convivencia   > 0 ? c.dimensions.convivencia   : null,
-      c.improvement !== 0 ? c.improvement : null,
       c.totalEvals,
     ]),
   ]
   const ws1 = XLSX.utils.aoa_to_sheet(rankingData)
-  ws1['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 13 }, { wch: 26 }, { wch: 20 }]
+  ws1['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 13 }, { wch: 20 }]
   XLSX.utils.book_append_sheet(wb, ws1, 'Ranking')
 
-  // ── Hoja 2: Evaluaciones del mes ────────────────────────────────────────────
+  // ── Hoja 2: Evaluaciones del período ────────────────────────────────────────
   const monthEvals = evaluations.filter(e => {
     const d = new Date(e.timestamp)
     return d.getMonth() === selectedMonth && d.getFullYear() === selectedYear
   }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
   const evalsData = [
-    ['Evaluaciones del mes — ' + monthLabel],
+    [`Evaluaciones — ${monthLabel}`],
     [],
     ['Fecha', 'Curso', 'Docente', 'Materia', 'Rol', 'Clima', 'Espacio', 'Participación', 'Convivencia', 'Promedio'],
     ...monthEvals.map(e => [
@@ -185,14 +226,14 @@ export function exportExcel({ ranking, evaluations, courseStats, selectedMonth, 
       e.dimensions.espacio,
       e.dimensions.participacion,
       e.dimensions.convivencia,
-      e.average,
+      evalAvg(e),
     ]),
   ]
   const ws2 = XLSX.utils.aoa_to_sheet(evalsData)
-  ws2['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 13 }, { wch: 10 }]
+  ws2['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 13 }, { wch: 10 }]
   XLSX.utils.book_append_sheet(wb, ws2, 'Evaluaciones')
 
-  // ── Hoja 3: Todas las evaluaciones ──────────────────────────────────────────
+  // ── Hoja 3: Historial completo ───────────────────────────────────────────────
   const allData = [
     ['Historial completo de evaluaciones'],
     [],
@@ -209,12 +250,12 @@ export function exportExcel({ ranking, evaluations, courseStats, selectedMonth, 
         e.dimensions.espacio,
         e.dimensions.participacion,
         e.dimensions.convivencia,
-        e.average,
+        evalAvg(e),
       ]),
   ]
   const ws3 = XLSX.utils.aoa_to_sheet(allData)
   ws3['!cols'] = ws2['!cols']
   XLSX.utils.book_append_sheet(wb, ws3, 'Historial completo')
 
-  XLSX.writeFile(wb, `informe-clima-aula-${monthLabel.replace(' ','-').toLowerCase()}.xlsx`)
+  XLSX.writeFile(wb, `informe-clima-aula-${monthLabel.replace(' ', '-').toLowerCase()}.xlsx`)
 }
