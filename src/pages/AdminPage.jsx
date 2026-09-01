@@ -493,9 +493,9 @@ function StatsPanel({ courseStats, ranking, alerts, evaluations }) {
     setExporting(type)
     try {
       if (type === 'pdf') {
-        await exportPDF({ ranking, courseStats, evaluations, selectedMonth: selMonth, selectedYear: selYear })
+        await exportPDF({ courseStats, evaluations, selectedMonth: selMonth, selectedYear: selYear })
       } else {
-        exportExcel({ ranking, evaluations, courseStats, selectedMonth: selMonth, selectedYear: selYear })
+        exportExcel({ courseStats, evaluations, selectedMonth: selMonth, selectedYear: selYear })
       }
     } finally {
       setTimeout(() => setExporting(''), 1000)
